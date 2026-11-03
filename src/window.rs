@@ -426,6 +426,8 @@ pub struct AppWindow {
     pointer: Point<Pixels>,
     /// Where a press on a `window_drag` node started, until it moves the window.
     drag_from: Option<Point<Pixels>>,
+    /// The last pointer position over a pane: hover focus acts only on real movement.
+    hover_at: Option<Point<Pixels>>,
     titlebar_applied: Option<(crate::layout::Titlebar, Option<[f32; 2]>)>,
     focused_pane: Option<String>,
     /// The mod block holding the keyboard for directional navigation.
@@ -515,6 +517,7 @@ impl AppWindow {
             initial_view: std::fs::read_to_string(file("view.json")).ok().and_then(|s| serde_json::from_str(&s).ok()),
             pointer: Point::default(),
             drag_from: None,
+            hover_at: None,
             titlebar_applied: None,
             focused_pane: None,
             focused_block: None,
@@ -3341,6 +3344,32 @@ impl AppWindow {
         self.sync(window, cx);
     }
 
+    /// `focus_pane_on_hover`: the pointer moved onto a tab's pane (terminal or mod).
+    fn hover_focus(&mut self, id: &str, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // A layout change under a still pointer (`pane.go`, a split) is not a hover.
+        if self.hover_at.replace(ev.position) == Some(ev.position) || !settings::get().focus_pane_on_hover {
+            return;
+        }
+        let busy = ev.pressed_button.is_some()
+            || self.drag.is_some()
+            || self.drag_from.is_some()
+            || self.pane_drag.is_some()
+            || self.float_drag.is_some()
+            || self.win_drag.is_some()
+            || self.overlays.iter().any(|o| o.kind.modal_keys())
+            || self.focused_block.is_some();
+        // A mod's input or editor holding the keyboard keeps it until a click.
+        let keys_free = window.focused(cx).is_none()
+            || self.focus.is_focused(window)
+            || self.terms.values().any(|t| t.focus.is_focused(window));
+        if busy || !keys_free || self.model.tab_of(id).is_none() || self.model.focused_pane().as_deref() == Some(id) {
+            return;
+        }
+        self.model.focus_pane(id);
+        self.focused_pane = None;
+        self.sync(window, cx);
+    }
+
     /// Until the mod takes the keyboard, the window holds the keys.
     fn focus_block(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.model.tab_of(id).is_some() {
@@ -3978,6 +4007,10 @@ impl AppWindow {
                                 cx.notify();
                             }
                         }))
+                        .on_mouse_move({
+                            let id = n.id.clone();
+                            cx.listener(move |this, ev: &MouseMoveEvent, window, cx| this.hover_focus(&id, ev, window, cx))
+                        })
                         .child(shown_terminal(&t.view, cx))
                         .into_any_element()
                 }
@@ -4025,6 +4058,10 @@ impl AppWindow {
             Some(Copy { root: Some(root), inst, .. }) => div()
                 .size_full()
                 .key_context(format!("Mod mod = {}", inst.name).as_str())
+                .when(in_pane, |d| {
+                    let hover = slot.to_owned();
+                    d.on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, window, cx| this.hover_focus(&hover, ev, window, cx)))
+                })
                 .when(in_pane, |d| {
                     let id = slot.to_owned();
                     d.on_any_mouse_down(cx.listener(move |this, _, _, cx| {
@@ -5239,6 +5276,7 @@ export default class Probe extends View {
     }
 
     include!("window/pane_size_tests.rs");
+    include!("window/hover_focus_tests.rs");
 
     #[test]
     fn terminal_menu_preserves_clicked_target_and_uses_mod_dimensions() {

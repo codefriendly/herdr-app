@@ -691,6 +691,12 @@ What's about the user, never a look:
   `p` writes Linux primary selection. `s` is ignored; cut buffers `0`–`7`
   are treated as the system clipboard.
   Clipboard reads (`?`) are never allowed.
+- `focus_pane_on_hover`: `true` focuses a pane (terminal or mod) when the
+  pointer moves onto it (default `false`). It waits while a mouse button is
+  held (selecting, dragging), while a dialog or popup is open, and while a mod
+  or one of its inputs has the keyboard; a click gives it back. Moving focus
+  with keys never jumps back to the pane under a still pointer.
+  Available in Settings → Look → Panes.
 - `telemetry`: `false` stops anonymous usage data and deletes what wasn't
   sent (on when absent; Settings → Privacy shows each report word for
   word, and `telemetry()` in mods). Once a day the app sends counts:

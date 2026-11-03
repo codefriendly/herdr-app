@@ -505,7 +505,20 @@ export default class Settings extends View {
         ),
       )
       .child(fontRow("font", "font_size", "Terminal font", s.font_family, DEFAULT_FONT, s.font_size))
-      .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT));
+      .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT))
+      .child(div().h(18))
+      .child(this.heading(t, "Panes"))
+      .child(this.row(t, "Focus panes on hover", "The pane under the pointer takes the keyboard, no click needed.", this.hoverFocusToggle(t)));
+  }
+
+  // Off is the default: switching it off leaves settings.json without the key.
+  hoverFocusToggle(t) {
+    const on = this.person.focus_pane_on_hover === true;
+    return this.toggle(t, "st-hover-focus", on, (_e, cx) =>
+      this.change((p) => {
+        if (on) delete p.focus_pane_on_hover;
+        else p.focus_pane_on_hover = true;
+      }, cx));
   }
 
   keyboard(t) {
