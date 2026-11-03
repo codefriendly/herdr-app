@@ -387,6 +387,9 @@ pub struct Person {
     /// Allow terminal programs (including remote ones) to copy text locally.
     #[serde(skip_serializing_if = "is_true")]
     pub clipboard_write: bool,
+    /// Focus a pane when the pointer moves onto it. Off unless set to true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub focus_pane_on_hover: bool,
     /// Minimum terminal text contrast ratio; 1 leaves program colors unchanged.
     pub minimum_contrast: f32,
     /// macOS Option sends Alt shortcuts, or follows the keyboard layout.
@@ -448,6 +451,7 @@ impl Default for Person {
             ui_font: None,
             telemetry: true,
             clipboard_write: true,
+            focus_pane_on_hover: false,
             minimum_contrast: 1.0,
             option_as_alt: OptionAsAlt::Auto,
             appearance: Appearance::System,
@@ -482,6 +486,7 @@ pub struct Settings {
     /// 0..1: below 1, what's behind a terminal shows through.
     pub terminal_opacity: f32,
     pub clipboard_write: bool,
+    pub focus_pane_on_hover: bool,
     pub minimum_contrast: f32,
     pub option_as_alt: OptionAsAlt,
     pub sounds: Sounds,
@@ -522,6 +527,7 @@ impl Default for Settings {
             terminal_padding: [10.0, 6.0],
             terminal_opacity: 1.0,
             clipboard_write: true,
+            focus_pane_on_hover: false,
             minimum_contrast: 1.0,
             option_as_alt: OptionAsAlt::Auto,
             sounds: Sounds::default(),
@@ -559,6 +565,7 @@ impl Settings {
             terminal_opacity: look.terminal_opacity.unwrap_or(1.0).clamp(0.0, 1.0),
             sounds: person.sounds.clone(),
             clipboard_write: person.clipboard_write,
+            focus_pane_on_hover: person.focus_pane_on_hover,
             minimum_contrast: person.minimum_contrast,
             option_as_alt: person.option_as_alt,
         }
@@ -878,6 +885,16 @@ mod tests {
             assert_eq!(serde_json::to_value(person).unwrap()["minimum_contrast"], serde_json::json!(ratio));
             assert_eq!(settings.problems().is_empty(), (1.0..=21.0).contains(&ratio));
         }
+    }
+
+    #[test]
+    fn hover_focus_defaults_off_and_can_be_enabled() {
+        let default: Person = serde_json::from_str("{}").unwrap();
+        assert!(!default.focus_pane_on_hover);
+        assert!(serde_json::to_value(&default).unwrap().get("focus_pane_on_hover").is_none());
+        let on: Person = serde_json::from_str(r#"{"focus_pane_on_hover":true}"#).unwrap();
+        assert!(Settings::compose(&on, &crate::layout::Look::default(), true).focus_pane_on_hover);
+        assert_eq!(serde_json::to_value(on).unwrap()["focus_pane_on_hover"], true);
     }
 
     #[test]

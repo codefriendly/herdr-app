@@ -463,6 +463,25 @@ fn option_key_settings_are_only_shown_on_macos(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn hover_focus_switch_shows_the_persons_setting(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    for platform in ["linux", "windows", "macos"] {
+        for (person, on) in [("{}", false), ("{focus_pane_on_hover: false}", false), ("{focus_pane_on_hover: true}", true)] {
+            let mut p = props();
+            p["section"] = json!("look");
+            let mut values = fixture(true, p, updates("current", "current"));
+            values.insert("window".into(), json!({"platform": platform}));
+            let setup = format!("this.person = {person};");
+            let tree = describe_with_values(cx, &staged, "frame/settings", values, Some(&setup)).unwrap();
+            let switch = tree.lines().find(|line| line.contains("st-hover-focus")).unwrap_or_else(|| panic!("{platform}: {tree}"));
+            assert_eq!(switch.contains("justify_end"), on, "{platform} {person}: {switch}");
+            assert!(tree.contains("Focus panes on hover"), "{tree}");
+        }
+    }
+}
+
+#[gpui::test]
 fn settings_sections_and_updates(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let start = Instant::now();

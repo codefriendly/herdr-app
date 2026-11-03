@@ -425,6 +425,8 @@ pub struct AppWindow {
     pointer: Point<Pixels>,
     /// Where a press on a `window_drag` node started, until it moves the window.
     drag_from: Option<Point<Pixels>>,
+    /// The last pointer position over a pane: hover focus acts only on real movement.
+    hover_at: Option<Point<Pixels>>,
     titlebar_applied: Option<(crate::layout::Titlebar, Option<[f32; 2]>)>,
     focused_pane: Option<String>,
     /// The mod block holding the keyboard for directional navigation.
@@ -514,6 +516,7 @@ impl AppWindow {
             initial_view: std::fs::read_to_string(file("view.json")).ok().and_then(|s| serde_json::from_str(&s).ok()),
             pointer: Point::default(),
             drag_from: None,
+            hover_at: None,
             titlebar_applied: None,
             focused_pane: None,
             focused_block: None,
@@ -3315,6 +3318,32 @@ impl AppWindow {
         self.sync(window, cx);
     }
 
+    /// `focus_pane_on_hover`: the pointer moved onto a tab's pane (terminal or mod).
+    fn hover_focus(&mut self, id: &str, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // A layout change under a still pointer (`pane.go`, a split) is not a hover.
+        if self.hover_at.replace(ev.position) == Some(ev.position) || !settings::get().focus_pane_on_hover {
+            return;
+        }
+        let busy = ev.pressed_button.is_some()
+            || self.drag.is_some()
+            || self.drag_from.is_some()
+            || self.pane_drag.is_some()
+            || self.float_drag.is_some()
+            || self.win_drag.is_some()
+            || self.overlays.iter().any(|o| o.kind.modal_keys())
+            || self.focused_block.is_some();
+        // A mod's input or editor holding the keyboard keeps it until a click.
+        let keys_free = window.focused(cx).is_none()
+            || self.focus.is_focused(window)
+            || self.terms.values().any(|t| t.focus.is_focused(window));
+        if busy || !keys_free || self.model.tab_of(id).is_none() || self.model.focused_pane().as_deref() == Some(id) {
+            return;
+        }
+        self.model.focus_pane(id);
+        self.focused_pane = None;
+        self.sync(window, cx);
+    }
+
     /// Until the mod takes the keyboard, the window holds the keys.
     fn focus_block(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.model.tab_of(id).is_some() {
@@ -3946,6 +3975,10 @@ impl AppWindow {
                                 cx.notify();
                             }
                         }))
+                        .on_mouse_move({
+                            let id = n.id.clone();
+                            cx.listener(move |this, ev: &MouseMoveEvent, window, cx| this.hover_focus(&id, ev, window, cx))
+                        })
                         .child(shown_terminal(&t.view, cx))
                         .into_any_element()
                 }
@@ -3993,6 +4026,10 @@ impl AppWindow {
             Some(Copy { root: Some(root), inst, .. }) => div()
                 .size_full()
                 .key_context(format!("Mod mod = {}", inst.name).as_str())
+                .when(in_pane, |d| {
+                    let hover = slot.to_owned();
+                    d.on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, window, cx| this.hover_focus(&hover, ev, window, cx)))
+                })
                 .when(in_pane, |d| {
                     let id = slot.to_owned();
                     d.on_any_mouse_down(cx.listener(move |this, _, _, cx| {
@@ -5075,6 +5112,54 @@ mod tests {
         let restored: super::Node = serde_json::from_value(serde_json::to_value(&root).unwrap()).unwrap();
         assert_eq!(restored.terminal_menu.as_deref(), Some("personal-menu"));
     }
+
+    /// Runs `window::tests::<name>` alone in a test process of its own, on a
+    /// fresh app home: a window takes process-wide things (the app home, the
+    /// mods' request channel) that tests beside it would otherwise share.
+    fn in_own_process(name: &str) {
+        let home = std::path::PathBuf::from(format!("/var/tmp/herdr-window-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("window::tests::{name}"), "--nocapture", "--test-threads=1"])
+            .env("HERDR_APP_HOME", &home)
+            .env("HERDR_TEST_WINDOW", name)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&home);
+        let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && log.contains("1 passed"), "{log}");
+    }
+
+    /// In the process `in_own_process` started for `name`: whether to go on.
+    fn running_alone(name: &str) -> bool {
+        std::env::var("HERDR_TEST_WINDOW").as_deref() == Ok(name)
+    }
+
+    /// The window on a core that's never there (`hc::offline`), showing
+    /// `layout` with `mod_name` (its `main.js`) in the home, past the first-run
+    /// welcome (it lists machines through the core). No other mods: the
+    /// shipped ones run programs on threads of their own, which the test
+    /// executor refuses.
+    fn open_window<'a>(cx: &'a mut gpui::TestAppContext, mod_name: &str, main_js: &str, layout: serde_json::Value) -> (gpui::Entity<super::AppWindow>, &'a mut gpui::VisualTestContext) {
+        use serde_json::json;
+        let home = crate::mods::app_dir();
+        crate::mods::write_workspace().unwrap();
+        let folder = home.join("mods").join(mod_name);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("mod.json"), r#"{ "place": "none" }"#).unwrap();
+        std::fs::write(folder.join("main.js"), main_js).unwrap();
+        std::fs::create_dir_all(home.join("layouts")).unwrap();
+        std::fs::write(home.join("layouts/test.json"), layout.to_string()).unwrap();
+        cx.update(crate::mods::init);
+        let requests = crate::mods::install_policy();
+        crate::mods::set_shared("layout".into(), json!("test"));
+        crate::mods::set_shared("frame.welcomed".into(), json!("test"));
+        let (view, cx) = cx.add_window_view(|window, cx| super::AppWindow::new(crate::hc::offline(), requests, window, cx));
+        assert_eq!(view.update(cx, |this, _| this.layout_name.clone()), "test");
+        (view, cx)
+    }
+
+    include!("window/hover_focus_tests.rs");
 
     #[test]
     fn terminal_menu_preserves_clicked_target_and_uses_mod_dimensions() {
